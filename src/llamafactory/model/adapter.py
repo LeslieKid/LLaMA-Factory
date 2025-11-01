@@ -214,9 +214,37 @@ def _setup_lora_tuning(
             input_embeddings = model.get_input_embeddings()
             output_embeddings = model.get_output_embeddings()
             module_names = set()
+            
+            # Store original vocab size before resizing
+            original_vocab_size = getattr(model.config, 'original_vocab_size', None)
+            if original_vocab_size is None:
+                logger.warning_rank0("original_vocab_size not found, using current vocab_size as baseline")
+                original_vocab_size = model.config.vocab_size
+            
             for name, module in model.named_modules():
                 if module in [input_embeddings, output_embeddings]:
                     module_names.add(name.split(".")[-1])
+                    
+                    # Register hook to freeze existing token embeddings
+                    def create_gradient_mask(orig_size):
+                        def gradient_mask_hook(grad):
+                            if grad is not None:
+                                # Zero out gradients for existing tokens, keep new tokens trainable
+                                masked_grad = grad.clone()
+                                masked_grad[:orig_size] = 0
+                                return masked_grad
+                            return grad
+                        return gradient_mask_hook
+                    
+                    # Apply gradient masking to freeze existing token embeddings
+                    module.weight.register_hook(create_gradient_mask(original_vocab_size))
+                    logger.info_rank0(f"Applied selective freezing to {name}: freezing first {original_vocab_size} tokens")
+                
+                elif isinstance(module, torch.nn.Embedding):
+                    module_name = name.split(".")[-1]
+                    if module_name == "seg_embeddings":
+                        module_names.add(module_name)
+                        logger.info_rank0(f"Found custom embedding layer: {module_name}")
 
             finetuning_args.additional_target = module_names
             logger.warning_rank0("Vocab has been resized, add {} to trainable params.".format(",".join(module_names)))

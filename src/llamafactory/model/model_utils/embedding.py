@@ -56,6 +56,7 @@ def resize_embedding_layer(model: "PreTrainedModel", tokenizer: "PreTrainedToken
         current_embedding_size = model.get_input_embeddings().weight.size(0)
 
     if len(tokenizer) > current_embedding_size:
+        model.config.original_vocab_size = current_embedding_size
         if getattr(model, "quantization_method", None):
             raise ValueError("Cannot resize embedding layers of a quantized model.")
 
